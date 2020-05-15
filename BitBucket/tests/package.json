@@ -1,0 +1,58 @@
+{
+    "name": "lf-fnx-beproduct",
+    "version": "1.0.0",
+    "main": "conf.js",
+    "scripts": {
+        "lftest": "protractor ./cucumberconf.js",
+        "lftest-dev": "protractor ./cucumberconf.js --cucumberOpts.tags \"not @staging and not @smoke-test\"",
+        "lftest-staging": "protractor ./cucumberconf.js --cucumberOpts.tags \"not @dev and not @smoke-test\"",
+        "lftest-smoke": "protractor ./cucumberconf.js --cucumberOpts.tags \"@smoke-test\"",
+        "lftest-dev-smoke": "protractor ./cucumberconf.js --cucumberOpts.tags \"@smoke-test and (not @staging or not @prod)\"",
+        "lftest-staging-smoke": "protractor ./cucumberconf.js --cucumberOpts.tags \"@smoke-test and (not @dev or not @prod)\"",
+        "lftest-prod-smoke": "protractor ./cucumberconf.js --cucumberOpts.tags \"@smoke-test and (not @dev or not @staging)\"",
+        "lftest-local": "protractor ./cucumberconf.js --disableChecks --cucumberOpts.tags",
+        "lf-test-debug": "node --inspect=5859 ./node_modules/protractor/bin/protractor ./cucumberconf.js",
+        "format": "prettier --config .prettierrc  \"src/**/*.{ts,js,json,md}\" --write",
+        "webdriver": "webdriver-manager update"
+    },
+    "husky": {
+        "hooks": {
+            "pre-commit": "lint-staged"
+        }
+    },
+    "lint-staged": {
+        "*.{ts,json,css,scss,html,md}": [
+            "prettier --config .prettierrc --write",
+            "git add"
+        ]
+    },
+    "dependencies": {
+        "@types/chai": "^4.2.4",
+        "@types/cucumber": "^6.0.0",
+        "@types/node": "^12.12.6",
+        "axios": "^0.19.0",
+        "chai": "^4.2.0",
+        "chai-as-promised": "^7.1.1",
+        "cucumber": "5.1.0",
+        "dotenv": "^8.2.0",
+        "fs-extra": "^8.1.0",
+        "log4js": "^5.3.0",
+        "moment": "^2.24.0",
+        "protractor": "^5.4.2",
+        "protractor-cucumber-framework": "6.1.1",
+        "protractor-multiple-cucumber-html-reporter-plugin": "^1.8.1",
+        "ts-node": "^8.4.1",
+        "tslint": "^5.20.1",
+        "tslint-consistent-codestyle": "^1.16.0",
+        "tslint-eslint-rules": "^5.4.0",
+        "typescript": "^3.7.2",
+        "xmlhttprequest": "^1.8.0"
+    },
+    "devDependencies": {
+        "husky": "^3.1.0",
+        "lint-staged": "^9.4.3",
+        "prettier": "^1.19.1",
+        "tslint-config-prettier": "^1.18.0",
+        "tslint-plugin-prettier": "^2.0.1"
+    }
+}

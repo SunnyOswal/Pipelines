@@ -1,0 +1,248 @@
+definitions:
+  caches:
+    nodeft: ${BITBUCKET_CLONE_DIR}/tests/node_modules
+    terraform: ${BITBUCKET_CLONE_DIR}/src/platform/.terraform/plugins
+
+image:
+  name: dsgregistry.azurecr.io/platform/linux/bpserverless
+  username: $ACR_Username
+  password: $ACR_Password
+clone:
+  depth: full # SonarCloud scanner needs the full history to assign issues properly
+
+pipelines:
+  pull-requests:
+    '**': #this runs as default for any branch not elsewhere defined
+      - parallel: # these steps will run in parallel
+          - step:
+              size: 2x # Double resources available for this step.
+              caches:
+                - node
+              script:
+                - /bin/bash Trigger-UnitTests.sh test
+              artifacts:
+                - coverage/lcov.info
+          - step:
+              size: 2x # Double resources available for this step.
+              caches:
+                - node
+              script:
+                - /bin/bash Trigger-ServerlessValidation.sh
+          - step:
+              size: 2x # Double resources available for this step.
+              script:
+                - cd ${BITBUCKET_CLONE_DIR}
+                - /bin/bash Trigger-TerraformValidation.sh
+
+      - step: # non-parallel step
+          size: 2x # Double resources available for this step.
+          name: Run static code analysis
+          services:
+            - docker
+          caches:
+            - docker
+          script:
+            - pipe: sonarsource/sonarcloud-scan:1.0.1
+              variables:
+                EXTRA_ARGS: '-Dsonar.typescript.lcov.reportPaths=coverage/lcov.info'
+
+  branches:
+    master:
+      - step:
+          size: 2x # Double resources available for this step.
+          name: Run all unit tests
+          script:
+            - yarn install
+            - yarn clean
+            - yarn test src
+          artifacts:
+            - coverage/lcov.info
+      - step:
+          size: 2x # Double resources available for this step.
+          name: Run static code analysis
+          services:
+            - docker
+          caches:
+            - docker
+          script:
+            - pipe: sonarsource/sonarcloud-scan:1.0.1
+              variables:
+                EXTRA_ARGS: '-Dsonar.typescript.lcov.reportPaths=coverage/lcov.info'
+      - step:
+          size: 2x # Double resources available for this step.
+          name: Deploy to Dev
+          deployment: Dev
+          caches:
+            - node
+            - terraform
+          script:
+            - cd ${BITBUCKET_CLONE_DIR}
+            - yarn install
+            - node ./prebuild.js
+            - /bin/bash Trigger-ProvisionAndDeploy.sh $TF_WORKSPACE
+
+      - parallel: # these steps will run in parallel
+          - step:
+              size: 2x
+              name: Run Functional Tests
+              deployment: Dev Functional Testing
+              caches:
+                - nodeft
+              script:
+                - echo "http://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories
+                - echo "http://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories
+                - apk add --no-cache --virtual .gyp python make g++
+                - apk add --no-cache --virtual build-dependencies udev
+                - apk add --no-cache --virtual build-dependencies ttf-opensans
+                - apk add --no-cache chromium-chromedriver
+                - apk add --no-cache --virtual build-dependencies chromium
+                - rm -rf /var/cache/* /tmp/*
+                - mkdir /var/cache/apk
+                - export CHROME_BIN=/usr/bin/chromium-browser
+                - export CHROME_PATH=/usr/lib/chromium/
+                - /bin/bash Update-TestFeatureFileSecrets.sh
+                - cd ${BITBUCKET_CLONE_DIR}/tests
+                - rm -rf src/common/temp
+                - mkdir src/common/temp
+                - yarn install
+                - yarn lftest-dev
+              after-script:
+                - cd ${BITBUCKET_CLONE_DIR}/tests
+                - node xrayapiutility.js
+          - step:
+              size: 2x
+              name: Run Smoke Tests
+              deployment: Dev Smoke Testing
+              caches:
+                - nodeft
+              script:
+                - echo "http://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories
+                - echo "http://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories
+                - apk add --no-cache --virtual .gyp python make g++
+                - apk add --no-cache --virtual build-dependencies udev
+                - apk add --no-cache --virtual build-dependencies ttf-opensans
+                - apk add --no-cache chromium-chromedriver
+                - apk add --no-cache --virtual build-dependencies chromium
+                - rm -rf /var/cache/* /tmp/*
+                - mkdir /var/cache/apk
+                - export CHROME_BIN=/usr/bin/chromium-browser
+                - export CHROME_PATH=/usr/lib/chromium/
+                - /bin/bash Update-TestFeatureFileSecrets.sh $IS_SMOKE_TEST
+                - cd ${BITBUCKET_CLONE_DIR}/tests
+                - rm -rf src/common/temp
+                - mkdir src/common/temp
+                - yarn install
+                - yarn lftest-dev-smoke
+              after-script:
+                - cd ${BITBUCKET_CLONE_DIR}/tests
+                - node xrayapiutility.js
+
+      - step:
+          size: 2x # Double resources available for this step.
+          name: Deploy to Staging
+          deployment: Staging
+          caches:
+            - node
+            - terraform
+          script:
+            - cd ${BITBUCKET_CLONE_DIR}
+            - yarn install
+            - node ./prebuild.js
+            - /bin/bash Trigger-WorkatoDeployment.sh $IS_WORKATO_DEPLOYMENT_REQUIRED $WORKATO_SERVICE_ACCOUNT_USER $WORKATO_SERVICE_ACCOUNT_USER_TOKEN $WORKATO_FOLDER_ID $WORKATO_PACKAGE_NAME
+            - /bin/bash Trigger-ProvisionAndDeploy.sh $TF_WORKSPACE
+      - parallel: # these steps will run in parallel
+          - step:
+              size: 2x
+              name: Run Functional Tests
+              deployment: Staging Functional Testing
+              caches:
+                - nodeft
+              script:
+                - echo "http://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories
+                - echo "http://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories
+                - apk add --no-cache --virtual .gyp python make g++
+                - apk add --no-cache --virtual build-dependencies udev
+                - apk add --no-cache --virtual build-dependencies ttf-opensans
+                - apk add --no-cache chromium-chromedriver
+                - apk add --no-cache --virtual build-dependencies chromium
+                - rm -rf /var/cache/* /tmp/*
+                - mkdir /var/cache/apk
+                - export CHROME_BIN=/usr/bin/chromium-browser
+                - export CHROME_PATH=/usr/lib/chromium/
+                - /bin/bash Update-TestFeatureFileSecrets.sh
+                - cd ${BITBUCKET_CLONE_DIR}/tests
+                - rm -rf src/common/temp
+                - mkdir src/common/temp
+                - yarn install
+                - yarn lftest-staging
+              after-script:
+                - cd ${BITBUCKET_CLONE_DIR}/tests
+                - node xrayapiutility.js
+          - step:
+              size: 2x
+              name: Run Smoke Tests
+              deployment: Staging Smoke Testing
+              caches:
+                - nodeft
+              script:
+                - echo "http://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories
+                - echo "http://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories
+                - apk add --no-cache --virtual .gyp python make g++
+                - apk add --no-cache --virtual build-dependencies udev
+                - apk add --no-cache --virtual build-dependencies ttf-opensans
+                - apk add --no-cache chromium-chromedriver
+                - apk add --no-cache --virtual build-dependencies chromium
+                - rm -rf /var/cache/* /tmp/*
+                - mkdir /var/cache/apk
+                - export CHROME_BIN=/usr/bin/chromium-browser
+                - export CHROME_PATH=/usr/lib/chromium/
+                - /bin/bash Update-TestFeatureFileSecrets.sh $IS_SMOKE_TEST
+                - cd ${BITBUCKET_CLONE_DIR}/tests
+                - rm -rf src/common/temp
+                - mkdir src/common/temp
+                - yarn install
+                - yarn lftest-staging-smoke
+              after-script:
+                - cd ${BITBUCKET_CLONE_DIR}/tests
+                - node xrayapiutility.js
+      - step:
+          size: 2x # Double resources available for this step.
+          name: Deploy to Production
+          deployment: Production
+          trigger: manual
+          caches:
+            - node
+            - terraform
+          script:
+            - cd ${BITBUCKET_CLONE_DIR}
+            - yarn install
+            - node ./prebuild.js
+            - /bin/bash Trigger-WorkatoDeployment.sh $IS_WORKATO_DEPLOYMENT_REQUIRED $WORKATO_SERVICE_ACCOUNT_USER $WORKATO_SERVICE_ACCOUNT_USER_TOKEN $WORKATO_FOLDER_ID $WORKATO_PACKAGE_NAME
+            - /bin/bash Trigger-ProvisionAndDeploy.sh $TF_WORKSPACE
+      - step:
+          size: 2x
+          name: Run Smoke Tests
+          deployment: Production Smoke Testing
+          caches:
+            - nodeft
+          script:
+            - echo "http://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories
+            - echo "http://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories
+            - apk add --no-cache --virtual .gyp python make g++
+            - apk add --no-cache --virtual build-dependencies udev
+            - apk add --no-cache --virtual build-dependencies ttf-opensans
+            - apk add --no-cache chromium-chromedriver
+            - apk add --no-cache --virtual build-dependencies chromium
+            - rm -rf /var/cache/* /tmp/*
+            - mkdir /var/cache/apk
+            - export CHROME_BIN=/usr/bin/chromium-browser
+            - export CHROME_PATH=/usr/lib/chromium/
+            - /bin/bash Update-TestFeatureFileSecrets.sh $IS_SMOKE_TEST
+            - cd ${BITBUCKET_CLONE_DIR}/tests
+            - rm -rf src/common/temp
+            - mkdir src/common/temp
+            - yarn install
+            - yarn lftest-prod-smoke
+          after-script:
+            - cd ${BITBUCKET_CLONE_DIR}/tests
+            - node xrayapiutility.js

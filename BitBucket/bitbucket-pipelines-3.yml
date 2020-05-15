@@ -1,0 +1,134 @@
+definitions:
+  # services:
+  #   docker:
+  #     memory: 512
+  caches:
+    # yarn: /usr/local/share/.cache/yarn
+    sonar: ~/.sonar/cache
+    nodeft: ${BITBUCKET_CLONE_DIR}/tests/node_modules
+    terraform: ${BITBUCKET_CLONE_DIR}/src/platform/.terraform/plugins
+  steps:
+    - step: &run-code-analysis
+        name: Run static code analysis
+        services:
+          - docker
+        caches:
+          - sonar
+          - docker
+        script:
+          - pipe: sonarsource/sonarcloud-scan:1.0.1
+            variables:
+              EXTRA_ARGS: "-Dsonar.typescript.lcov.reportPaths=coverage/lcov.info"
+
+    - step: &provision-and-deploy
+        name: Provision and Deploy
+        services:
+          - docker
+        caches:
+          - node
+          - terraform
+        script:
+          - /bin/bash Trigger-ProvisionAndDeploy.sh $DEPLOY_ENV
+          - /bin/bash Trigger-BuildAndPushDockerImage.sh $DEPLOY_ENV
+
+    - step: &run-functional-tests
+        name: Run Functional Tests
+        caches:
+          - nodeft
+          - terraform
+        script:
+          - /bin/bash Trigger-FunctionalTests.sh $DEPLOY_ENV
+        after-script:
+          - cd ${BITBUCKET_CLONE_DIR}/tests
+          - node xrayapiutility.js
+
+    - step: &run-e2e-tests
+        name: Run E2E Tests
+        caches:
+          - nodeft
+          - terraform
+        script:
+          - /bin/bash Trigger-E2ETests.sh $DEPLOY_ENV
+
+options:
+  size: 2x # Double resources available for all steps
+image:
+  name: dsgregistry.azurecr.io/platform/linux/bpserverless
+  username: $ACR_Username
+  password: $ACR_Password
+clone:
+  depth: full # SonarCloud scanner needs the full history to assign issues properly
+
+pipelines:
+  pull-requests:
+    "**": #this runs as default for any branch not elsewhere defined
+      - parallel:
+        - step:
+            name: Run unit tests based on new code
+            caches:
+              - node
+            script:
+              - /bin/bash Trigger-UnitTests.sh test
+            artifacts:
+              - coverage/lcov.info
+        - step:
+            name: Run serverless validation
+            caches:
+              - node
+            script:
+              - /bin/bash Trigger-ServerlessValidation.sh $DEPLOY_ENV
+        - step:
+            name: Run terraform validation
+            caches:
+              - terraform
+            script:
+              - /bin/bash Trigger-TerraformValidation.sh $DEPLOY_ENV
+        - step:
+            name: Run docker build validation
+            services:
+              - docker
+            script:
+              - /bin/bash Trigger-DockerImageValidation.sh $DEPLOY_ENV
+      - step: *run-code-analysis
+
+  branches:
+    master:
+      - step:
+          name: Run all unit tests
+          caches:
+            - node
+          script:
+            - yarn install
+            - yarn clean
+            - yarn test src
+          artifacts:
+            - coverage/lcov.info
+      - step: *run-code-analysis
+      - step:
+          <<: *provision-and-deploy
+          name: Deploy to Dev
+          deployment: Dev
+      - step:
+          <<: *run-functional-tests
+          deployment: Dev Functional Testing
+
+      - step:
+          <<: *provision-and-deploy
+          name: Deploy to Staging
+          deployment: Staging
+      - step:
+          <<: *run-functional-tests
+          deployment: Staging Functional Testing
+      - step:
+          <<: *run-e2e-tests
+          trigger: manual
+          deployment: Staging E2E Testing
+
+      - step:
+          <<: *provision-and-deploy
+          name: Deploy to Production
+          trigger: manual
+          deployment: Prod
+      - step:
+          <<: *run-e2e-tests
+          deployment: Prod E2E Testing

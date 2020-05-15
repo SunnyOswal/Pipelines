@@ -1,0 +1,11 @@
+{
+    "fields": {
+        "project": {
+            "id": "10100"
+        },
+        "summary": "This will be updated at runtime by xrayapiutility.js with appropriate summary",
+        "issuetype": {
+            "id": "10091"
+        }
+    }
+}

@@ -1,0 +1,125 @@
+definitions:
+  caches:
+    nodeft: ${BITBUCKET_CLONE_DIR}/tests/node_modules
+    terraform: ${BITBUCKET_CLONE_DIR}/src/platform/.terraform/plugins
+
+image:
+  name: dsgregistry.azurecr.io/platform/linux/bpserverless
+  username: $ACR_Username
+  password: $ACR_Password
+clone:
+  depth: full # SonarCloud scanner needs the full history to assign issues properly
+
+pipelines:
+  pull-requests:
+    '**': #this runs as default for any branch not elsewhere defined
+      - parallel: # these steps will run in parallel
+          - step:
+              size: 2x # Double resources available for this step.
+              name: Run unit test
+              caches:
+                - node
+              script:
+                - /bin/bash Trigger-UnitTests.sh test
+              artifacts:
+                - coverage/lcov.info
+          - step:
+              size: 2x # Double resources available for this step.
+              name: Run Serverless Validation
+              caches:
+                - node
+              script:
+                - /bin/bash Trigger-ServerlessValidation.sh
+          - step:
+              size: 2x # Double resources available for this step.
+              name: Run Terraform Validation
+              script:
+                - cd ${BITBUCKET_CLONE_DIR}
+                - /bin/bash Trigger-TerraformValidation.sh $DEPLOY_ENV
+      - step:
+          size: 2x # Double resources available for this step.
+          name: Run static code analysis
+          services:
+            - docker
+          caches:
+            - docker
+          script:
+            - pipe: sonarsource/sonarcloud-scan:1.0.1
+              variables:
+                EXTRA_ARGS: '-Dsonar.typescript.lcov.reportPaths=coverage/lcov.info'
+
+  branches:
+    master:
+      - step:
+          size: 2x # Double resources available for this step.
+          name: Run all unit tests
+          caches:
+            - node
+          script:
+            - yarn install
+            - yarn clean
+            - yarn test src
+          artifacts:
+            - coverage/lcov.info
+      - step:
+          size: 2x # Double resources available for this step.
+          name: Run static code analysis
+          services:
+            - docker
+          caches:
+            - docker
+          script:
+            - pipe: sonarsource/sonarcloud-scan:1.0.1
+              variables:
+                EXTRA_ARGS: '-Dsonar.typescript.lcov.reportPaths=coverage/lcov.info'
+      - step:
+          size: 2x # Double resources available for this step.
+          name: Deploy to Dev
+          deployment: Dev
+          caches:
+            - node
+            - terraform
+          script:
+            - cd ${BITBUCKET_CLONE_DIR}
+            - yarn install
+            - node ./prebuild.js
+            - /bin/bash Trigger-ProvisionAndDeploy.sh $DEPLOY_ENV
+      - step:
+          size: 2x
+          name: Run Functional Tests
+          deployment: Dev Functional Testing
+          caches:
+            - nodeft
+          script:
+            - echo "http://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories
+            - echo "http://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories
+            - apk add --no-cache --virtual .gyp python make g++
+            - apk add --no-cache --virtual build-dependencies udev
+            - apk add --no-cache --virtual build-dependencies ttf-opensans
+            - apk add --no-cache chromium-chromedriver
+            - apk add --no-cache --virtual build-dependencies chromium
+            - rm -rf /var/cache/* /tmp/*
+            - mkdir /var/cache/apk
+            - export CHROME_BIN=/usr/bin/chromium-browser
+            - export CHROME_PATH=/usr/lib/chromium/
+            - /bin/bash Update-TestFeatureFileSecrets.sh
+            - cd ${BITBUCKET_CLONE_DIR}/tests
+            - rm -rf src/common/temp
+            - mkdir src/common/temp
+            - yarn install
+            - yarn lftest-dev
+          after-script:
+            - cd ${BITBUCKET_CLONE_DIR}/tests
+            - node xrayapiutility.js
+      - step:
+          size: 2x # Double resources available for this step.
+          name: Deploy to Staging
+          deployment: Staging
+          caches:
+            - node
+            - terraform
+          script:
+            - cd ${BITBUCKET_CLONE_DIR}
+            - yarn install
+            - node ./prebuild.js
+            - /bin/bash Trigger-ProvisionAndDeploy.sh $DEPLOY_ENV
